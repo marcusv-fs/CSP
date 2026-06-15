@@ -1,0 +1,10 @@
+datatype file = info
+
+channel accept:file
+channel print:file
+
+Printer = accept?doc -> print?doc -> Printer
+
+assert Printer:[deterministic]
+assert Printer:[deadlock free]
+assert Printer:[divergence free]

@@ -1,0 +1,18 @@
+
+T = {0..3}
+T2 = {0..6}
+
+channel reset
+channel query:T2
+channel add:T
+
+Tot(i)=
+    reset -> Tot(0)
+    []
+    query!i -> Tot(i)
+    []
+    i <=3 & add?x:T -> Tot(i + x)
+
+assert Tot(0) :[deadlock free]
+assert Tot(0) :[deterministic]
+assert Tot(0) :[divergence free]

@@ -1,0 +1,13 @@
+datatype COD = c1 | c1 | c3 | c4
+
+channel passar, painel
+
+autorizados = {(u1, s1), (u2, s2)}
+
+Validador(usr, senha, <>) = False
+Validador(usr, senha, l ^ ista) = True if ((usr, senha) == l) else Validador(ista)
+
+CatracaLivre = passar -> CatracaFechada
+CatracaFechada = painel?usr?senha -> Servidor(usr, senha)
+
+Servidor(usr, senha) = if (Validador(usr, senha, autorizados)) then CatracaLivre else CatracaFechada

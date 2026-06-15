@@ -1,0 +1,125 @@
+-- Limites
+MAX_INSUMO = 8
+LIM_VALORES = {1..8}
+
+-- Usuários
+N_USUARIOS = 2
+ID = {1..N_USUARIOS}
+
+-- Preços
+preco(cafe) = 2
+preco(cafe_c_leite) = 3
+preco(chocolate) = 4
+preco(cappuccino) = 5
+
+-- Tipos de dados
+datatype Bebidas = cafe | cafe_c_leite | chocolate | cappuccino
+datatype Insumos = insumo_cafe | insumo_leite | insumo_choco
+
+BebidasQuentes = {cafe, cafe_c_leite, cappuccino}
+BebidasFrias = {chocolate}
+
+-- Canais
+channel escolher : ID.Bebidas
+channel ins_creditos : ID.LIM_VALORES 
+channel descontar : ID.LIM_VALORES 
+channel servir, servir_quente, servir_frio : ID.Bebidas
+channel aviso_falta : Insumos
+channel repor : Insumos.LIM_VALORES
+channel preparar: Bebidas
+channel autorizar, liberado : ID.Bebidas
+
+Pagamento = 
+    ins_creditos?id?val:{preco(b) | b <- Bebidas} -> PagamentoUsuario(id, val)
+
+PagamentoUsuario(id, cdt) = 
+    [] b : Bebidas @
+    (cdt == preco(b) & escolher.id!b -> descontar.id!preco(b) -> autorizar.id!b -> Pagamento)
+
+Dispensador(Produtos) =
+    liberado?id?bebida:Produtos -> preparar!bebida -> servir!id!bebida -> Dispensador(Produtos)
+
+Aviso(c, l, ch) =
+    (if c == 0 then aviso_falta!insumo_cafe -> SKIP else SKIP) ;
+    (if l == 0 then aviso_falta!insumo_leite -> SKIP else SKIP) ;
+    (if ch == 0 then aviso_falta!insumo_choco -> SKIP else SKIP) ;
+    GerenciadorEstoque(c, l, ch)
+    
+Reposicao(c, l, ch) =
+    repor!insumo_cafe?qtd:{1 .. (MAX_INSUMO - c)} -> GerenciadorEstoque(c + qtd, l, ch)
+    []
+    repor!insumo_leite?qtd:{1 .. (MAX_INSUMO - l)} -> GerenciadorEstoque(c, l + qtd, ch)
+    []
+    repor!insumo_choco?qtd:{1 .. (MAX_INSUMO - ch)} -> GerenciadorEstoque(c, l, ch + qtd)
+
+DispensadorQuente = Dispensador(BebidasQuentes) [[ servir <- servir_quente ]]
+DispensadorFrio = Dispensador(BebidasFrias) [[ servir <- servir_frio ]]
+InterfacePagamento = Pagamento [[ autorizar <- liberado ]]
+
+Dispensadores = DispensadorQuente  ||| DispensadorFrio
+
+Consumo(c, l, ch) =
+    (c >= 3 & escolher?id!cafe -> servir_quente!id!cafe -> Aviso(c-3, l, ch))
+    []
+    (c >= 1 and l >= 2 & escolher?id!cafe_c_leite -> servir_quente!id!cafe_c_leite -> Aviso(c-1, l-2, ch))
+    []
+    (ch >= 3 & escolher?id!chocolate -> servir_frio!id!chocolate -> Aviso(c, l, ch-3))
+    []
+    (c >= 1 and l >= 1 and ch >= 1 & escolher?id!cappuccino -> servir_quente!id!cappuccino -> Aviso(c-1, l-1, ch-1))
+
+GerenciadorEstoque(c, l, ch) =
+    Consumo(c, l, ch)
+    []
+    Reposicao(c, l, ch)
+
+SISTEMA_ATENDIMENTO = InterfacePagamento [| {| liberado |} |] Dispensadores
+MAQUINA_BASE = SISTEMA_ATENDIMENTO [| {| escolher, servir_quente, servir_frio |} |] GerenciadorEstoque(MAX_INSUMO, MAX_INSUMO, MAX_INSUMO)
+
+MAQUINA = MAQUINA_BASE \ {| descontar, preparar, liberado|}
+
+Usuario(id) =
+    ([] b : BebidasQuentes @
+    ins_creditos.id!preco(b) -> escolher.id!b -> servir_quente.id!b -> Usuario(id))
+    []
+    ([] b : BebidasFrias @
+    ins_creditos.id!preco(b) -> escolher.id!b -> servir_frio.id!b -> Usuario(id))
+
+USUARIOS = ||| i : ID @ Usuario(i)
+
+SISTEMA = MAQUINA [| {| ins_creditos, escolher, servir_quente, servir_frio |} |] USUARIOS
+
+assert SISTEMA :[deterministic]
+assert SISTEMA :[deadlock free]
+assert SISTEMA :[divergence free]
+
+---------------------- Parte 2 ------------------------
+channel get, set : Bebidas
+
+Memoria(val) = 
+    set?novo_val -> Memoria(novo_val)
+    []
+    get!val -> Memoria(val)
+
+FaseSelecao(id) = escolher.id?bebida -> set!bebida -> SKIP
+FasePagamento(id) = get?bebida -> ins_creditos.id!preco(bebida) -> descontar.id!preco(bebida) -> SKIP
+FasePreparo() = get?bebida -> preparar!bebida -> SKIP
+FaseEntrega(id) = get?bebida -> 
+    (if bebida == chocolate then servir_frio.id!bebida -> SKIP 
+     else servir_quente.id!bebida -> SKIP)
+
+-- Def. Transação
+FluxoTransacao(id) = 
+    FaseSelecao(id);
+    FasePagamento(id);
+    FasePreparo();
+    FaseEntrega(id);
+    FluxoTransacao(id)
+
+Transacao(id, bebida) = (FluxoTransacao(id) [| {| get, set |} |] Memoria(bebida)) \ {| get, set |}
+
+assert Transacao(1, cafe) :[deterministic]
+assert Transacao(1, cafe) :[deadlock free]
+assert Transacao(1, cafe) :[divergence free]
+
+
+

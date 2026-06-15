@@ -1,0 +1,22 @@
+channel a, b, c
+
+P = a -> SKIP
+
+Q = b -> c -> STOP
+
+PQ = P [] Q
+
+PUQ = P [|{}|] Q
+
+PUQ2 = P ||| Q
+
+
+channel d, e
+channel f:{1, 2, 3}
+
+P2 = d -> f!2 -> P2 -- sender
+Q2 = f?x -> e -> Q2 -- Receiver
+
+Sync = P2 [|{|f|}|] Q2
+
+assert P :[deadlock free]

@@ -1,0 +1,81 @@
+-- Estoques Iniciais
+MAX_CAFE = 10
+MAX_LEITE = 10
+MAX_CHOCOLATE = 10
+
+-- Limitador de valores para análises
+QTD_REPOSICAO = {1..10}
+
+-- Preços
+pCafe = 2
+pCafeLeite = 3
+pChoco = 3
+pCappuc = 4
+
+-- Tipos de dados
+datatype Bebidas = cafe | cafe_c_leite | chocolate | cappuccino
+datatype Insumos = insumo_cafe | insumo_leite | insumo_choco
+
+-- Canais
+channel escolher : Bebidas
+channel pagar : QTD_REPOSICAO 
+channel servir : Bebidas
+channel aviso_falta : Insumos
+channel repor : Insumos.QTD_REPOSICAO
+
+-- Processo principal
+-- c: café | l: leite | ch: chocolate
+MAQUINA(c, l, ch) = 
+    (     
+        -- Café: usa 3 de café
+        (c >= 3 & escolher!cafe -> pagar!pCafe -> servir!cafe -> 
+            MAQUINA(c-3, l, ch))
+        []
+        -- Café com leite: usa 1 de café e 2 de leite
+        (c >= 1 and l >= 2 & escolher!cafe_c_leite -> pagar!pCafeLeite -> servir!cafe_c_leite -> 
+            MAQUINA(c-1, l-2, ch))
+        []
+        -- Chocolate: usa 3 de chocolate
+        (ch >= 3 & escolher!chocolate -> pagar!pChoco -> servir!chocolate -> 
+            MAQUINA(c, l, ch-3))
+        []
+        -- Cappuccino: usa 1 de cada
+        (c >= 1 and l >= 1 and ch >= 1 & escolher!cappuccino -> pagar!pCappuc -> servir!cappuccino -> 
+            MAQUINA(c-1, l-1, ch-1))
+    )
+    []
+    (
+        -- Avisos de Falta
+        (c == 0 & aviso_falta!insumo_cafe -> MAQUINA(c, l, ch))
+        []
+        (l == 0 & aviso_falta!insumo_leite -> MAQUINA(c, l, ch))
+        []
+        (ch == 0 & aviso_falta!insumo_choco -> MAQUINA(c, l, ch))
+    )
+    []
+    (
+        -- Reposição
+        repor!insumo_cafe?qtd:{1 .. (MAX_CAFE - c) } -> 
+            MAQUINA(if c + qtd > MAX_CAFE then MAX_CAFE else c + qtd, l, ch)
+        []
+        repor!insumo_leite?qtd:{1 .. (MAX_CAFE - l) } -> 
+            MAQUINA(c, if l + qtd > MAX_LEITE then MAX_LEITE else l + qtd, ch)
+        []
+        repor!insumo_choco?qtd:{1 .. (MAX_CAFE - ch) } -> 
+            MAQUINA(c, l, if ch + qtd > MAX_CHOCOLATE then MAX_CHOCOLATE else ch + qtd)
+    )
+
+SISTEMA = MAQUINA(MAX_CAFE, MAX_LEITE, MAX_CHOCOLATE)
+
+-- Verificações
+
+assert SISTEMA :[deterministic]
+assert SISTEMA :[deadlock free]
+assert SISTEMA :[divergence free]
+
+SO_REPOSICAO = 
+    repor?i?q -> SO_REPOSICAO
+    []
+    aviso_falta?i -> SO_REPOSICAO
+
+assert SO_REPOSICAO [T= SISTEMA \ {| escolher, pagar, servir |}

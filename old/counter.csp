@@ -1,0 +1,15 @@
+T = {1}
+
+channel increment: T
+channel decrement: T
+
+Count(i) = 
+    i == 0 & increment.1 -> Count(1)
+    []
+    i > 0 and i < 4 & increment.1 -> Count(i + 1)
+    []
+    i > 0 and i < 5 & decrement.1 -> Count(i - 1)
+
+assert Count(4) :[deadlock free]
+assert Count(4) :[deterministic]
+assert Count(4) :[divergence free]

@@ -1,0 +1,108 @@
+-- Limites
+MAX_INSUMO = 8
+MAX_CREDITO = 8
+LIM_VALORES = {1..8}
+
+-- Usuários
+N_USUARIOS = 2
+ID = {1..N_USUARIOS}
+
+-- Preços
+pCafe = 2
+pCafeLeite = 3
+pChoco = 4
+pCappuc = 5
+
+-- Tipos de dados
+datatype Bebidas = cafe | cafe_c_leite | chocolate | cappuccino
+datatype Insumos = insumo_cafe | insumo_leite | insumo_choco
+
+-- Canais
+channel escolher : ID.Bebidas
+channel ins_creditos : ID.LIM_VALORES 
+channel descontar : ID.LIM_VALORES 
+channel servir, servir_quente, servir_frio : ID.Bebidas
+channel aviso_falta : Insumos
+channel repor : Insumos.LIM_VALORES
+channel preparar: Bebidas
+
+Pagamento = 
+    ins_creditos?id?val:{pCafe, pCafeLeite, pChoco, pCappuc} -> PagamentoUsuario(id, val)
+
+PagamentoUsuario(id, cdt) = 
+    (cdt == pCafe & escolher.id!cafe -> descontar.id!pCafe -> Dispensador(id, cafe))
+    []
+    (cdt == pCafeLeite & escolher.id!cafe_c_leite -> descontar.id!pCafeLeite -> Dispensador(id, cafe_c_leite))
+    []
+    (cdt == pChoco & escolher.id!chocolate -> descontar.id!pChoco -> Dispensador(id, chocolate))
+    []
+    (cdt == pCappuc & escolher.id!cappuccino -> descontar.id!pCappuc -> Dispensador(id, cappuccino))
+
+Dispensador(id, bebida) =
+    preparar!bebida -> servir!id!bebida -> Pagamento
+
+Aviso(c, l, ch) =
+    (c == 0 & aviso_falta!insumo_cafe -> Aviso(c - 1, l, ch))
+    []
+    (l == 0 & aviso_falta!insumo_leite -> Aviso(c, l - 1, ch))
+    []
+    (ch == 0 & aviso_falta!insumo_choco -> Aviso(c, l, ch - 1))
+    []
+    (c != 0 and l != 0 and ch != 0 & GerenciadorEstoque(c, l, ch))
+    
+
+Reposicao(c, l, ch) =
+    repor!insumo_cafe?qtd:{1 .. (if c == -1 then MAX_INSUMO else MAX_INSUMO - c) } -> 
+        GerenciadorEstoque(if c == -1 then c + qtd + 1 else c + qtd, l, ch)
+    []
+    repor!insumo_leite?qtd:{1 .. (if l == -1 then MAX_INSUMO else MAX_INSUMO - l) } -> 
+        GerenciadorEstoque(c, if l == -1 then l + qtd + 1 else l + qtd, ch)
+    []
+    repor!insumo_choco?qtd:{1 .. (if ch == -1 then MAX_INSUMO else MAX_INSUMO - ch) } -> 
+        GerenciadorEstoque(c, l, if ch == -1 then ch + qtd + 1 else ch + qtd)
+
+Consumo(c, l, ch) =
+    (c >= 3 & escolher?id!cafe -> servir!id!cafe -> Aviso(c-3, l, ch))
+    []
+    (c >= 1 and l >= 2 & escolher?id!cafe_c_leite -> servir!id!cafe_c_leite -> Aviso(c-1, l-2, ch))
+    []
+    (ch >= 3 & escolher?id!chocolate -> servir!id!chocolate -> Aviso(c, l, ch-3))
+    []
+    (c >= 1 and l >= 1 and ch >= 1 & escolher?id!cappuccino -> servir!id!cappuccino -> Aviso(c-1, l-1, ch-1))
+
+GerenciadorEstoque(c, l, ch) =
+    Consumo(c, l, ch)
+    []
+    Reposicao(c, l, ch)
+
+MAQUINA_BASE = Pagamento [| {| escolher, servir |} |] GerenciadorEstoque(MAX_INSUMO, MAX_INSUMO, MAX_INSUMO)
+
+-- Máquina com ocultação
+MAQUINA = MAQUINA_BASE \ {| descontar, preparar|}
+
+SO_REPOSICAO = 
+    repor?i?q -> SO_REPOSICAO
+    []
+    aviso_falta?i -> SO_REPOSICAO
+    []
+    ins_creditos?id?val -> SO_REPOSICAO
+
+Usuario(id) =
+    ins_creditos.id!pCafe -> escolher.id!cafe -> servir.id!cafe -> Usuario(id)
+    []
+    ins_creditos.id!pCafeLeite -> escolher.id!cafe_c_leite -> servir.id!cafe_c_leite -> Usuario(id)
+    []
+    ins_creditos.id!pChoco -> escolher.id!chocolate -> servir.id!chocolate -> Usuario(id)
+    []
+    ins_creditos.id!pCappuc -> escolher.id!cappuccino -> servir.id!cappuccino -> Usuario(id)
+
+USUARIOS = ||| i : ID @ Usuario(i)
+
+SISTEMA = MAQUINA [| {| ins_creditos, escolher, servir |} |] USUARIOS
+
+-- Verificações
+assert SISTEMA :[deterministic]
+assert SISTEMA :[deadlock free]
+assert SISTEMA :[divergence free]
+
+assert SO_REPOSICAO [T= SISTEMA \ {| escolher, servir |}

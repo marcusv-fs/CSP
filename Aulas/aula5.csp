@@ -1,0 +1,37 @@
+channel a, b, c
+
+P = a -> P
+
+Q = P [[a <- a, a <-b]]
+-- Nesse caso, mantive o A mas também criei um caminho em b, que antes não existia.
+----------------------------------
+P2 = a-> P2 [] b -> STOP
+Q2 = P2 [[a <- a, b <-a]]
+
+assert P2 :[deterministic]
+assert Q2 :[deterministic]
+
+-- A renomeação pode causar não determinismo, os dois serão traduzidos para A e não são diferenciáveis a priori, porém retornam resultados diferentes.
+----------------------------------
+channel d:{1,2}
+
+S = d?x -> S
+P3 = a -> P3
+Q3 = P3 [[ a <- d.1, a <-d.2]]
+Q4 = P3 [[ a <- d.i | i <- {1, 2}]]
+-- Formas diferentes de sobrescerver multiplos valores
+----------------------------------
+
+P4 = a -> SKIP
+Sistema = P4 ; d?x -> Sistema
+
+-- Composição sequencial -> Tudo o que acontece antes do SKIP é perdido, não consigo passar um valor para o próximo
+----------------------------------
+channel get, set :{1,2}
+P5 = d?x -> set!x -> SKIP
+Q5 = get?x -> e!x -> P5
+
+MEM(v0) = set?v -> MEM(v)
+                    [] get!v0 -> MEM(v0)
+
+PQ(P5;Q5) [|{|get,set|}|] MEM(1)

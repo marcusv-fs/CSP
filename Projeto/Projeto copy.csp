@@ -1,0 +1,39 @@
+-- Para a atividade da disciplina, pretendo fazer um modelo CSP para representar um Ground Control Station (GCS)¹ e um enxame de drones.
+
+-- Inicialmente, a ideia será modelar o comportamento de um único drone que tem por objetivo vigiar um setor. Depois, a GCS passará a enviar comandos que alteram o comportamento deste drone.
+
+-- Um terceiro passo, será a adição de um segundo drone, caracterizando um enxame, sendo controlado pela GCS. Para mais drones, entende-se que não será necessário mudar a lógica.
+
+
+-- Aumentar o detalhamento de um único drone e explorar as propriedades de um enxame. O enxame não precisa ser composto por uma quantidade muito grande de drones, mas precisa ter propriedades interessantes.
+
+POS = {1..10}
+ROT = {1..5}
+datatype IMG = inimigo | outro
+datatype MISSION = m_colidir | m_fugir
+
+
+channel desligado, armado, pousar
+channel takePhoto: IMG
+channel receiveMission: MISSION
+channel receive: POS.POS.POS.ROT
+channel move: POS.POS.POS.ROT
+
+ServerAnalize(img) = img
+
+Drone = desligado -> armado -> DroneOper
+
+DroneOper = receive?x?y?z?yaw -> move!x!y!z!yaw -> takePhoto?img ->
+            if (ServerAnalize(img) == inimigo) then DroneEngage
+            else DroneOper
+
+DroneEngage = receiveMission?obj -> 
+              if (obj == m_colidir) then DroneCol
+              else if (obj == m_fugir) then DroneOper
+              else takePhoto?img -> DroneEngage
+
+DroneCol = takePhoto?img -> receive?x?y?z?yaw -> move!x!y!z!yaw -> SKIP
+
+assert Drone :[deterministic]
+assert Drone :[deadlock free]
+assert Drone :[divergence free]

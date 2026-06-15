@@ -1,0 +1,168 @@
+-- Limites
+MAX_INSUMO = 8
+LIM_VALORES = {1..8}
+
+-- Usuários
+N_USUARIOS = 2
+ID = {1..N_USUARIOS}
+
+-- Preços
+preco(cafe) = 2
+preco(cafe_c_leite) = 3
+preco(chocolate) = 4
+preco(cappuccino) = 5
+
+-- Tipos de dados
+datatype Bebidas = cafe | cafe_c_leite | chocolate | cappuccino
+datatype Insumos = insumo_cafe | insumo_leite | insumo_choco
+
+BebidasQuentes = {cafe, cafe_c_leite, cappuccino}
+BebidasFrias = {chocolate}
+
+-- Canais
+channel escolher : ID.Bebidas
+channel ins_creditos : ID.LIM_VALORES 
+channel descontar : ID.LIM_VALORES 
+channel servir, servir_quente, servir_frio : ID.Bebidas
+channel aviso_falta : Insumos
+channel repor : Insumos.LIM_VALORES
+channel preparar: Bebidas
+channel autorizar, liberado : ID.Bebidas
+channel cancelar
+
+Pagamento = 
+    ins_creditos?id?val:{preco(b) | b <- Bebidas} -> PagamentoUsuario(id, val)
+    []
+    cancelar -> Pagamento
+
+PagamentoUsuario(id, cdt) = 
+    [] b : Bebidas @
+    (cdt == preco(b) & escolher.id!b -> descontar.id!preco(b) -> autorizar.id!b -> Pagamento)
+
+Dispensador(Produtos) =
+    liberado?id?bebida:Produtos -> preparar!bebida -> servir!id!bebida -> Dispensador(Produtos)
+
+Aviso(c, l, ch) =
+    (if c == 0 then aviso_falta!insumo_cafe -> SKIP else SKIP) ;
+    (if l == 0 then aviso_falta!insumo_leite -> SKIP else SKIP) ;
+    (if ch == 0 then aviso_falta!insumo_choco -> SKIP else SKIP) ;
+    GerenciadorEstoque(c, l, ch)
+    
+Reposicao(c, l, ch) =
+    repor!insumo_cafe?qtd:{1 .. (MAX_INSUMO - c)} -> GerenciadorEstoque(c + qtd, l, ch)
+    []
+    repor!insumo_leite?qtd:{1 .. (MAX_INSUMO - l)} -> GerenciadorEstoque(c, l + qtd, ch)
+    []
+    repor!insumo_choco?qtd:{1 .. (MAX_INSUMO - ch)} -> GerenciadorEstoque(c, l, ch + qtd)
+
+DispensadorQuente = Dispensador(BebidasQuentes) [[ servir <- servir_quente ]]
+DispensadorFrio = Dispensador(BebidasFrias) [[ servir <- servir_frio ]]
+InterfacePagamento = Pagamento [[ autorizar <- liberado ]]
+
+Dispensadores = DispensadorQuente  ||| DispensadorFrio
+
+Consumo(c, l, ch) =
+    (c >= 3 & escolher?id!cafe -> servir_quente!id!cafe -> Aviso(c-3, l, ch))
+    []
+    (c >= 1 and l >= 2 & escolher?id!cafe_c_leite -> servir_quente!id!cafe_c_leite -> Aviso(c-1, l-2, ch))
+    []
+    (ch >= 3 & escolher?id!chocolate -> servir_frio!id!chocolate -> Aviso(c, l, ch-3))
+    []
+    (c >= 1 and l >= 1 and ch >= 1 & escolher?id!cappuccino -> servir_quente!id!cappuccino -> Aviso(c-1, l-1, ch-1))
+
+GerenciadorEstoque(c, l, ch) =
+    Consumo(c, l, ch)
+    []
+    Reposicao(c, l, ch)
+
+SISTEMA_ATENDIMENTO = InterfacePagamento [| {| liberado |} |] Dispensadores
+MAQUINA_BASE = SISTEMA_ATENDIMENTO [| {| escolher, servir_quente, servir_frio |} |] GerenciadorEstoque(MAX_INSUMO, MAX_INSUMO, MAX_INSUMO)
+
+MAQUINA = MAQUINA_BASE \ {| descontar, preparar, liberado|}
+
+Usuario(id) =
+    ([] b : BebidasQuentes @
+    ins_creditos.id!preco(b) -> escolher.id!b -> servir_quente.id!b -> Usuario(id))
+    []
+    ([] b : BebidasFrias @
+    ins_creditos.id!preco(b) -> escolher.id!b -> servir_frio.id!b -> Usuario(id))
+
+USUARIOS = ||| i : ID @ Usuario(i)
+
+SISTEMA_ORIGINAL = MAQUINA [| {| ins_creditos, escolher, servir_quente, servir_frio |} |] USUARIOS
+
+-- Paralelismo Alfabetizado
+ALPHA_PAG = {| cancelar, ins_creditos, escolher, descontar, liberado |}
+ALPHA_DISP = {| liberado, preparar, servir_quente, servir_frio |}
+ALPHA_INTER = {| escolher, servir_quente, servir_frio, cancelar |}
+ALPHA_ESTOQUE = {| escolher, servir_quente, servir_frio, aviso_falta, repor |}
+
+Interface_Maq(id) = 
+    (escolher.id?b -> 
+        (if b == chocolate then servir_frio.id!b -> Interface_Maq(id)
+         else servir_quente.id!b -> Interface_Maq(id))
+    )
+    []
+    (cancelar -> Interface_Maq(id))
+
+INTERFACES = ||| i : ID @ Interface_Maq(i)
+
+-- A composição é associativa. Não importa a ordem de composição.
+INT_PAG = INTERFACES [ ALPHA_INTER || ALPHA_PAG ] InterfacePagamento
+
+-- 2. Compondo o resultado com o Dispensador
+COMP_PAG_DISP = INT_PAG [ union(ALPHA_INTER, ALPHA_PAG) || ALPHA_DISP ] Dispensadores
+
+-- 3. Compondo com o Gerenciador de Estoque
+ALPHA_SIST_PARC = union(union(ALPHA_INTER, ALPHA_PAG), ALPHA_DISP)
+MAQUINA_ALFA = COMP_PAG_DISP [ ALPHA_SIST_PARC || ALPHA_ESTOQUE ] GerenciadorEstoque(MAX_INSUMO, MAX_INSUMO, MAX_INSUMO)
+
+assert MAQUINA_ALFA :[deadlock free]
+assert MAQUINA_ALFA :[divergence free]
+assert MAQUINA_ALFA :[deterministic]
+
+assert MAQUINA_ALFA\ {| descontar, preparar, liberado |} [T= MAQUINA
+assert  MAQUINA [T= MAQUINA_ALFA\ {| descontar, preparar, liberado |}
+
+
+----------------------------------- PARTE 2: Piping de Processos 
+datatype StatusPg = msg_ok | msg_erro
+channel in, out : ID.Bebidas.StatusPg
+channel falha_pagamento
+
+-- Pagamento
+PipePagamento = 
+    escolher?id?bebida ->
+    ins_creditos.id?val ->
+    (if val == preco(bebida) then
+        descontar.id!val -> out!id!bebida!msg_ok -> PipePagamento
+     else
+        out!id!bebida!msg_erro -> PipePagamento
+    )
+
+-- Validador
+PipeValidador = 
+    in?id?b?status ->
+    (if status == msg_ok then 
+        out!id!b!msg_ok -> PipeValidador
+     else 
+        falha_pagamento -> PipeValidador
+    )
+
+-- Preparo
+PipePreparo = 
+    in?id?bebida!msg_ok ->
+    preparar!bebida ->
+    out!id!bebida!msg_ok -> PipePreparo
+
+-- Entrega
+PipeEntrega = 
+    in?id?bebida!msg_ok ->
+    (if bebida == chocolate then servir_frio.id!bebida -> PipeEntrega
+     else servir_quente.id!bebida -> PipeEntrega)
+
+PipelineRobusto = ((PipePagamento [out <-> in] PipeValidador) [out <-> in] PipePreparo) [out <-> in] PipeEntrega
+
+assert PipelineRobusto :[divergence free] 
+assert PipelineRobusto :[deterministic]   
+assert PipelineRobusto :[deadlock free]  

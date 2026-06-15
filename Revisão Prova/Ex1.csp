@@ -1,0 +1,4 @@
+FiltraPares(<>) = <>
+FiltraPares(<x> ^ s) =
+ if( x % 2 == 0) then <x> ^ FiltraPares(s)
+ else FiltraPares(s)

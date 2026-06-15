@@ -1,0 +1,7 @@
+channel a, b, c, d, e
+
+P = a -> b -> P
+
+Q = c -> d -> Q
+
+PQ = P ||| Q

@@ -1,0 +1,9 @@
+datatype T = IN | OUT
+
+channel door: T
+
+Door = door?ingredients:T -> Door
+
+assert Door:[deterministic]
+assert Door:[livelock free]
+assert Door:[deadlock free]

@@ -1,0 +1,35 @@
+-- ==========================================
+-- TIPOS E CANAIS
+-- ==========================================
+
+-- Definimos o tipo T como um conjunto pequeno para o FDR conseguir processar
+T = {1..3}
+
+-- Definimos as respostas do sistema
+datatype Answer = yes | no
+
+-- Canais baseados no livro
+channel add : T
+channel query : T
+channel answer : Answer
+
+-- ==========================================
+-- PROCESSO SET
+-- ==========================================
+
+-- 1. O estado inicial: Inicia chamando o SET com um conjunto vazio {}
+SET_INIT = SET({})
+
+-- 2. O processo principal parametrizado pelo conjunto S
+SET(S) = 
+    -- Ação de adicionar um elemento 'x'. 
+    -- Usamos a função nativa 'union' para juntar o conjunto 'S' com o elemento '{x}'
+    add?x:T -> SET(union(S, {x}))
+    []
+    -- Ação de consultar um elemento 'y'.
+    query?y:T -> 
+        -- Usamos a função nativa 'member(elemento, conjunto)' para fazer o y ∈ S
+        if member(y, S) then 
+            answer!yes -> SET(S)
+        else 
+            answer!no -> SET(S)

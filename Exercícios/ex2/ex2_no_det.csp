@@ -1,0 +1,141 @@
+-- Limites
+MAX_INSUMO = 8
+MAX_CREDITO = 8
+LIM_VALORES = {1..8}
+
+-- Usuários
+N_USUARIOS = 2
+ID = {1..N_USUARIOS}
+
+-- Preços
+pCafe = 2
+pCafeLeite = 3
+pChoco = 3
+pCappuc = 4
+
+-- Tipos de dados
+datatype Bebidas = cafe | cafe_c_leite | chocolate | cappuccino
+datatype Insumos = insumo_cafe | insumo_leite | insumo_choco
+
+-- Canais
+channel escolher : Bebidas
+channel ins_creditos : LIM_VALORES 
+channel descontar : LIM_VALORES 
+channel servir : Bebidas
+channel aviso_falta : Insumos
+channel repor : Insumos.LIM_VALORES
+
+Pagamento(cdt) = 
+    ins_creditos?val:{1 .. (MAX_CREDITO - cdt)} -> Pagamento(cdt + val)
+    []
+    cdt >= pCafe & escolher!cafe -> descontar!pCafe -> Pagamento(cdt - pCafe)
+    []
+    cdt >= pCafeLeite & escolher!cafe_c_leite -> descontar!pCafeLeite -> Pagamento(cdt - pCafeLeite)
+    []
+    cdt >= pChoco & escolher!chocolate -> descontar!pChoco -> Pagamento(cdt - pChoco)
+    []
+    cdt >= pCappuc & escolher!cappuccino -> descontar!pCappuc -> Pagamento(cdt - pCappuc)
+
+Dispensador =
+    (escolher!cafe -> descontar!pCafe -> servir!cafe -> Dispensador)
+    []
+    (escolher!cafe_c_leite -> descontar!pCafeLeite -> servir!cafe_c_leite -> Dispensador)
+    []
+    (escolher!chocolate -> descontar!pChoco -> servir!chocolate -> Dispensador)
+    []
+    (escolher!cappuccino -> descontar!pCappuc -> servir!cappuccino -> Dispensador)
+
+Aviso(c, l, ch) =
+    (c == 0 & aviso_falta!insumo_cafe -> GerenciadorEstoque(c - 1, l, ch))
+    []
+    (l == 0 & aviso_falta!insumo_leite -> GerenciadorEstoque(c, l - 1, ch))
+    []
+    (ch == 0 & aviso_falta!insumo_choco -> GerenciadorEstoque(c, l, ch - 1))
+
+Reposicao(c, l, ch) =
+    repor!insumo_cafe?qtd:{1 .. (if c == -1 then MAX_INSUMO else MAX_INSUMO - c) } -> 
+        GerenciadorEstoque(if c == -1 then c + qtd + 1 else c + qtd, l, ch)
+    []
+    repor!insumo_leite?qtd:{1 .. (if l == -1 then MAX_INSUMO else MAX_INSUMO - l) } -> 
+        GerenciadorEstoque(c, if l == -1 then l + qtd + 1 else l + qtd, ch)
+    []
+    repor!insumo_choco?qtd:{1 .. (if ch == -1 then MAX_INSUMO else MAX_INSUMO - ch) } -> 
+        GerenciadorEstoque(c, l, if ch == -1 then ch + qtd + 1 else ch + qtd)
+
+Consumo(c, l, ch) =
+    (c >= 3 & escolher!cafe -> servir!cafe -> GerenciadorEstoque(c-3, l, ch))
+    []
+    (c >= 1 and l >= 2 & escolher!cafe_c_leite -> servir!cafe_c_leite -> GerenciadorEstoque(c-1, l-2, ch))
+    []
+    (ch >= 3 & escolher!chocolate -> servir!chocolate -> GerenciadorEstoque(c, l, ch-3))
+    []
+    (c >= 1 and l >= 1 and ch >= 1 & escolher!cappuccino -> servir!cappuccino -> GerenciadorEstoque(c-1, l-1, ch-1))
+
+GerenciadorEstoque(c, l, ch) =
+    Consumo(c, l, ch)
+    []
+    Aviso(c, l, ch)
+    []
+    Reposicao(c, l, ch)
+
+PAGAMENTOS = ||| i : ID @ Pagamento(0)
+
+PAG_DISP = PAGAMENTOS [| {| escolher, descontar |} |] Dispensador
+
+MAQUINA = PAG_DISP [| {| escolher, servir |} |] GerenciadorEstoque(MAX_INSUMO, MAX_INSUMO, MAX_INSUMO)
+
+-- Verificações componentes 
+assert Pagamento(0) :[deterministic]
+assert Dispensador :[deterministic]
+assert GerenciadorEstoque(MAX_INSUMO, MAX_INSUMO, MAX_INSUMO) :[deterministic]
+
+assert Pagamento(0) :[deadlock free]
+assert Dispensador :[deadlock free]
+assert GerenciadorEstoque(MAX_INSUMO, MAX_INSUMO, MAX_INSUMO) :[deadlock free]
+
+-- Verificações da máquina
+assert MAQUINA :[deterministic]
+assert MAQUINA :[deadlock free]
+assert MAQUINA :[divergence free]
+
+-- SO_REPOSICAO sem ID na inserção de créditos
+SO_REPOSICAO = 
+    repor?i?q -> SO_REPOSICAO
+    []
+    aviso_falta?i -> SO_REPOSICAO
+    []
+    ins_creditos?val -> SO_REPOSICAO
+
+assert SO_REPOSICAO [T= MAQUINA \ {| escolher, descontar, servir |}
+
+-- Verificações com usuário
+
+Usuario(id) =
+    ins_creditos?val -> Usuario(id)
+    []
+    escolher!cafe -> servir!cafe -> Usuario(id)
+    []
+    escolher!cafe_c_leite -> servir!cafe_c_leite -> Usuario(id)
+    []
+    escolher!chocolate -> servir!chocolate -> Usuario(id)
+    []
+    escolher!cappuccino -> servir!cappuccino -> Usuario(id)
+
+-- Criar os N usuários em paralelo, o @ funciona como um "para cada" i
+USUARIOS = ||| i : ID @ Usuario(i)
+
+SISTEMA = MAQUINA [| {| ins_creditos, escolher, servir |} |] USUARIOS
+
+-- Verificações Finais
+assert Usuario(1) :[deterministic]
+assert Usuario(2) :[deadlock free]
+
+assert SISTEMA :[deterministic]
+assert SISTEMA :[deadlock free]
+assert SISTEMA :[divergence free]
+
+assert SO_REPOSICAO [T= SISTEMA \ {| escolher, descontar, servir |}
+
+-- Como o sistema foi projetado de forma que multiplos usuários acessem paralelamente a máquina, inserimos um não-determinismo no programa. Isso acontece porque não é possível determinar qual dos usuários acessará a máquina. Tomando como referência o exemplo da questão, isto é, os dois requisitam um café ao mesmo tempo, contudo a máquina só tem insumos para um deles. Com isso, apenas um deles conseguirá acessar a bebida e o outro ficará com os créditos presos na máquina. Contudo, não é possível determinar qual dos dois acessará o café, isso é determinado pela race condition, ou seja, quem chegar primeiro.
+
+-- Nesta segunda versão, o programa é não determinístico, pois não é informado a todo momento qual o usuário está realizando a ação e receberá uma resposta da máquina.
