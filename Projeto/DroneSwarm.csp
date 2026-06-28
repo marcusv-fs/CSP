@@ -1,12 +1,12 @@
 -- ==========================================
 -- Tipos e Constantes
 -- ==========================================
-MAX_BAT = 20 -- Tamanho bateria
-WARN_BAT = 6 -- Aviso de bateria fraca
-RTH_BAT = 4 -- Interromper operação e voltar para casa
-MAX_PRT_PTS = 5  -- Máximo de pontos da patrulha
-ID = {0..5} -- Identificador dos drones
-RSSI = {0..10} -- Qualidade do sinal em db/-10, quanto menor, melhor
+MAX_BAT = 20
+WARN_BAT = 6
+RTH_BAT = 4
+MAX_PRT_PTS = 5
+ID = {0..5} 
+RSSI = {0..10} 
 MISSION_STEPS = {0..30}
 
 datatype STATUS = OK | LOST_COMMS | LOW_QUALITY_COMMS | LOST_GPS | IMU_FAIL | INTERNAL_ERROR | CRITICAL_BATT
@@ -14,75 +14,152 @@ datatype MISSION_STATUS = MISSION_FINISHED | MISSION_FAILED
 datatype OBSTACLE = NONE | PASSABLE | IMPASSABLE 
 
 -- ==========================================
--- Canais de Comunicação
+-- Canais de Comunicação Globais e Internos
 -- ==========================================
-channel test, takeoff, land, return_home, alert_low_batt, move, alert_impassable, take_control, manual_cmd, physical_problem, abort_manual
+-- Físicos e Ação
+channel test, takeoff, land, return_home, move
 channel recharge : {1 .. MAX_BAT}
-channel receive_mission : MISSION_STEPS
+channel consume_bat, batt_critical_rth, alert_low_batt
+
+-- Sensores
 channel check_status, report_error : STATUS
+channel check_obstacle : OBSTACLE 
+channel physical_problem
+
+-- Telemetria e GCS
+channel receive_mission : MISSION_STEPS
 channel connect_to_gcs, ping_gcs : RSSI
 channel report_gcs: MISSION_STATUS
-channel check_obstacle : OBSTACLE 
+channel alert_impassable 
+channel take_control, manual_cmd, abort_manual
 
 -- ==========================================
--- Processos do Drone
+-- 1. SISTEMA ELÉTRICO (ELEC)
 -- ==========================================
-Drone(id, batt) =
-    check_status?curr_status -> 
-        if (curr_status == OK) then connect_to_gcs?rssi -> DroneReady(id, batt, curr_status, rssi)
-        else report_error!curr_status -> Drone(id, batt)
-
-DroneReady(id, batt, status, rssi) =
-    batt > 4 & test -> DroneReady(id, batt-1, status, rssi)
-    []
-    batt < MAX_BAT & recharge?val:{1 .. (MAX_BAT - batt)} -> DroneReady(id, batt + val, status, rssi)
-    []
-    batt > 4 & receive_mission?m_steps -> takeoff -> DroneStep(id, batt, m_steps, status, rssi)
-
-DroneStep(id, batt, m_steps, status, rssi) = 
+-- Gerencia estado de energia e garante que alertas sejam disparados apenas 1 vez ao cruzar limites.
+ELEC(batt) =
     if batt == 0 then STOP
-    else 
-        (
-            check_status?new_status -> 
-                if (new_status == OK) then 
-                    ping_gcs?new_rssi -> 
-                        if (new_rssi < 7) then  
-                            if (batt > 6) then ExecMStep(id, batt - 1, m_steps, new_status, new_rssi) 
-                            else if (batt > 4) then alert_low_batt -> ExecMStep(id, batt - 1, m_steps, new_status, new_rssi)
-                            else report_error!CRITICAL_BATT -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
-                        else report_error!LOW_QUALITY_COMMS -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
-                else report_error!new_status -> land -> Drone(id, batt) 
-        )
-        [> take_control -> ManualControl(id, batt, status, rssi) -- Interrupção!
+    else if batt == WARN_BAT then 
+        alert_low_batt -> ELEC_NORMAL(batt)
+    else if batt == RTH_BAT then 
+        batt_critical_rth -> ELEC_LOW(batt)
+    else ELEC_NORMAL(batt)
 
-ExecMStep(id, batt, m_steps, status, rssi) = 
-    (
-        if m_steps > 0 then 
-            check_obstacle?obs -> 
-                if (obs == IMPASSABLE) then 
-                    alert_impassable -> DroneStep(id, batt, m_steps - 1, status, rssi) 
-                else 
-                    move -> DroneStep(id, batt, m_steps - 1, status, rssi) 
-        else 
-            report_gcs!MISSION_FINISHED -> return_home -> land -> Drone(id, batt - 1)
-    )
-    [> take_control -> ManualControl(id, batt, status, rssi) -- Interrupção!
+ELEC_NORMAL(batt) =
+    consume_bat -> ELEC(batt-1)
+    []
+    batt < MAX_BAT & recharge?val:{1 .. (MAX_BAT - batt)} -> ELEC(batt+val)
 
--- NOVO: O Processo de Controle Manual e tratamento da falha física
-ManualControl(id, batt, status, rssi) =
+ELEC_LOW(batt) =
     if batt == 0 then STOP
     else
-        (manual_cmd -> ManualControl(id, batt - 1, status, rssi))
+        consume_bat -> ELEC_LOW(batt-1)
         []
-        (physical_problem -> abort_manual -> land -> Drone(id, batt - 1))
+        -- Se recarregar, volta para o processo principal para reavaliar a tensão
+        batt < MAX_BAT & recharge?val:{1 .. (MAX_BAT - batt)} -> ELEC(batt+val) 
 
 -- ==========================================
--- Processos da Ground Control Station (GCS)
+-- 2. SISTEMA DE SENSORES (SENS)
+-- ==========================================
+-- Representa o Hardware lendo o mundo físico continuamente.
+SENS = 
+    check_status?s -> SENS
+    []
+    check_obstacle?obs -> SENS
+    []
+    physical_problem -> SENS
+
+-- ==========================================
+-- 3. SISTEMA DE COMUNICAÇÃO (COMM)
+-- ==========================================
+-- Roteador de telemetria. (Poderia ter estados de ONLINE/OFFLINE aqui no futuro)
+COMM = 
+    connect_to_gcs?rssi -> COMM
+    [] ping_gcs?rssi -> COMM
+    [] receive_mission?m_steps -> COMM
+    [] take_control -> COMM
+    [] manual_cmd -> COMM
+    [] alert_impassable -> COMM
+    [] report_gcs?st -> COMM
+    [] report_error?err -> COMM
+    [] alert_low_batt -> COMM
+    [] abort_manual -> COMM
+
+-- ==========================================
+-- 4. SISTEMA DE CONTROLE / AUTOPILOTO (CONTROL)
+-- ==========================================
+CONTROL =
+    check_status?s -> 
+        if s == OK then connect_to_gcs?rssi -> CTRL_WAIT
+        else report_error!s -> CONTROL
+
+CTRL_WAIT =
+    test -> consume_bat -> CTRL_WAIT
+    []
+    receive_mission?m_steps -> takeoff -> consume_bat -> CTRL_FLY(m_steps)
+    []
+    batt_critical_rth -> CTRL_WAIT
+    []
+    take_control -> DO_MANUAL -- Permite assumir o controle mesmo com o drone no chão
+
+CTRL_FLY(m) = 
+    -- 1. Checagem de Interrupções no topo do ciclo (Avionics Loop)
+    take_control -> DO_MANUAL
+    []
+    batt_critical_rth -> DO_RTH
+    []
+    -- 2. Lógica normal de voo caso não haja interrupções
+    (
+        if m == 0 then 
+            report_gcs!MISSION_FINISHED -> return_home -> consume_bat -> land -> CTRL_WAIT
+        else 
+            check_status?s -> 
+                if s == OK then 
+                    check_obstacle?obs -> 
+                        if obs == IMPASSABLE then 
+                            alert_impassable -> CTRL_FLY(m-1) 
+                        else 
+                            move -> consume_bat -> CTRL_FLY(m-1)
+                else report_error!s -> return_home -> consume_bat -> land -> CTRL_WAIT
+    )
+
+DO_MANUAL =
+    manual_cmd -> consume_bat -> DO_MANUAL
+    []
+    physical_problem -> abort_manual -> land -> CTRL_WAIT
+    []
+    batt_critical_rth -> DO_RTH
+
+DO_RTH =
+    return_home -> consume_bat -> land -> CTRL_WAIT
+    
+-- ==========================================
+-- COMPOSIÇÃO PARALELA DO DRONE
+-- ==========================================
+-- Definimos quais fios (canais) conectam as placas (processos) dentro do Drone.
+
+-- Fios conectando Controle e Comunicação
+SYNC_CTRL_COMM = {| connect_to_gcs, receive_mission, alert_impassable, report_gcs, report_error, take_control, manual_cmd, abort_manual |}
+-- Fios conectando Controle e Sensores
+SYNC_CTRL_SENS = {| check_status, check_obstacle, physical_problem |}
+-- Fios conectando Controle e Elétrica
+SYNC_CTRL_ELEC = {| consume_bat, batt_critical_rth |}
+-- Fios conectando Comunicação e Elétrica
+SYNC_COMM_ELEC = {| alert_low_batt |}
+
+-- O DRONE COMPLETO (Montando os blocos)
+SYS_1 = CONTROL [| SYNC_CTRL_COMM |] COMM
+SYS_2 = SYS_1 [| SYNC_CTRL_SENS |] SENS
+DRONE_PARALLEL = SYS_2 [| union(SYNC_CTRL_ELEC, SYNC_COMM_ELEC) |] ELEC(10)
+
+
+-- ==========================================
+-- SISTEMA EXTERNO: A GROUND CONTROL STATION
 -- ==========================================
 GCS = 
     connect_to_gcs?rssi -> GCS
-    [] receive_mission?steps -> GCS
     [] ping_gcs?rssi -> GCS
+    [] receive_mission?steps -> GCS
     [] alert_low_batt -> GCS
     [] report_error?err -> GCS
     [] report_gcs?status -> GCS
@@ -91,12 +168,9 @@ GCS =
     [] manual_cmd -> GCS
     [] abort_manual -> GCS
 
--- ==========================================
--- Sistema Principal
--- ==========================================
-SYNC_CHANNELS = {| connect_to_gcs, receive_mission, ping_gcs, alert_low_batt, report_error, report_gcs, alert_impassable, take_control, manual_cmd, abort_manual |}
+SYNC_DRONE_GCS = {| connect_to_gcs, receive_mission, ping_gcs, alert_low_batt, report_error, report_gcs, alert_impassable, take_control, manual_cmd, abort_manual |}
 
-Sistema = Drone(0, 10) [| SYNC_CHANNELS |] GCS
+Sistema = DRONE_PARALLEL [| SYNC_DRONE_GCS |] GCS
 
 -- ==========================================
 -- Asserções e Refinamentos (Testes do FDR4)
