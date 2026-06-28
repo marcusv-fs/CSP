@@ -1,0 +1,131 @@
+-- ==========================================
+-- Tipos e Constantes
+-- ==========================================
+datatype ObstacleState = Passable | Impassable
+
+MAX_BAT = 15
+WARN_BAT = 4
+RTH_BAT = 2
+MAX_PTS = 3 -- Quantidade de pontos no ciclo de patrulha
+
+-- ==========================================
+-- Canais de Comunicação
+-- ==========================================
+channel test, takeoff, land, crash, recharge
+channel receive_mission
+channel alert_gcs
+
+-- Movimentação Explícita e Sensores
+channel update_pos, pos_reached, pos_not_reached
+channel check_sensors, clear_path
+channel detect_obstacle : ObstacleState
+channel next_point
+
+-- Controle Manual e Falhas
+channel manual_control, manual_cmd
+channel sensor_failure, comm_failure, abort_mission
+
+-- Sistema de Bateria e RTH
+channel consume_bat, battery_warning
+channel battery_rth_signal, trigger_rth
+
+-- ==========================================
+-- Processos do Drone
+-- ==========================================
+
+-- 1. Estado Inicial
+DRONE_WAITING = 
+    test -> DRONE_WAITING
+    []
+    recharge -> DRONE_WAITING -- Permite voos subsequentes
+    []
+    receive_mission -> takeoff -> MISSION_SUPERVISOR
+
+-- 2. Supervisor da Missão
+-- Interrupções assíncronas mantidas: Manual e RTH da Bateria
+MISSION_SUPERVISOR = 
+    (PATROL(1) [> (manual_control -> MANUAL_MODE))
+    [> (battery_rth_signal -> RTH_SEQUENCE)
+
+RTH_SEQUENCE = trigger_rth -> land -> DRONE_WAITING
+
+-- 3. Missão de Patrulha (O Loop de Controle)
+-- O drone tenta alcançar o ponto 'p' repetidamente em ciclos
+PATROL(p) = 
+    update_pos -> 
+    (
+        -- Caso 1: Chegou no alvo, avança para o próximo ponto do ciclo
+        pos_reached -> next_point -> PATROL((p % MAX_PTS) + 1)
+        
+        []
+        
+        -- Caso 2: Ainda em movimento, gasta bateria e checa sensores
+        pos_not_reached -> consume_bat -> check_sensors ->
+        (
+            -- Caminho livre, continua o movimento em direção a 'p'
+            clear_path -> PATROL(p)
+            
+            []
+            
+            -- Obstáculo detectado DURANTE o movimento
+            detect_obstacle!Passable -> PATROL(p)
+            []
+            detect_obstacle!Impassable -> alert_gcs -> next_point -> PATROL((p % MAX_PTS) + 1)
+        )
+    )
+
+-- 4. Controle Manual 
+MANUAL_MODE = 
+    manual_cmd -> consume_bat -> MANUAL_MODE
+    []
+    sensor_failure -> abort_mission -> crash -> STOP
+    []
+    comm_failure -> abort_mission -> RTH_SEQUENCE
+
+-- ==========================================
+-- Processo da Bateria 
+-- ==========================================
+BATTERY(bat) = 
+    if bat <= RTH_BAT then
+        battery_rth_signal -> WAIT_RECHARGE
+    else if bat == WARN_BAT then
+        battery_warning -> BATTERY_LOOP(bat)
+    else
+        BATTERY_LOOP(bat)
+
+BATTERY_LOOP(bat) = 
+    consume_bat -> BATTERY(bat - 1)
+    []
+    recharge -> BATTERY(MAX_BAT) -- A bateria pode ser recarregada a qualquer momento na base
+
+WAIT_RECHARGE = recharge -> BATTERY(MAX_BAT)
+
+-- ==========================================
+-- Sistema Principal
+-- ==========================================
+-- Sincronizamos os processos no consumo e recarga da bateria, 
+-- e no sinal de emergência RTH.
+SYSTEM = DRONE_WAITING 
+         [| {| consume_bat, battery_rth_signal, recharge |} |] 
+         BATTERY(MAX_BAT)
+
+-- ==========================================
+-- Asserções e Refinamentos (Testes do FDR4)
+-- ==========================================
+
+assert SYSTEM :[deterministic]
+assert SYSTEM :[deadlock free]
+assert SYSTEM :[divergence free]
+
+
+-- 1. O drone pode sofrer falha de sensor e cair? (Reachability)
+assert STOP [T= SYSTEM \ diff(Events, {|crash|})
+
+-- 2. O RTH pode ser acionado com sucesso? (Reachability)
+assert STOP [T= SYSTEM \ diff(Events, {|trigger_rth|})
+
+-- 3. A missão trava se a comunicação com a GCS cair durante o voo? (Deadlock)
+-- Se esconder o 'alert_gcs' causar deadlock, significa que o drone 
+-- fica "preso" esperando a GCS confirmar o alerta do obstáculo instransponível.
+GCS_DURING_MISSION = {| alert_gcs, manual_control, manual_cmd |}
+assert (SYSTEM \ GCS_DURING_MISSION) :[deadlock free]

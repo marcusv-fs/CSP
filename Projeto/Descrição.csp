@@ -1,0 +1,16 @@
+ -- Fazer uma missão foda
+ -- Fazer um refinamento vendo se a missão continua sem a gcs
+ -- fazer um refinamento vendo se o drone pode ter um problema que o faz abortar a missão
+
+ um drone está no estado de pronto (DroneWaiting). Ao receber a missão vinda da GCS, o drone decola e parte para a execução da missão. Enquanto está no estado de DroneWaiting, ele pode receber uma missão ou realizar testes. Caso receba testes, ele os executa e volta ao estado de DroneWaiting. 
+
+ Missão de patrulha:
+ O drone pode receber uma missão de patrulha, recebendo uma lista com N pontos de GPS como parâmetro. Nesse caso, ele deverá ir para o primeiro ponto da lista e passar a se movimentar entre cada ponto da lista. COntudo, enquanto se movimenta, ele deverá constantemente atualizar sua posição interna, comparar com a posição alvo e verificar se os sensores detectaram algum obstáculo que o impede de chegar no destino. Caso detecte algum obstáculo, ele deve avaliar se o obstáculo é instransponível ou não. Caso não consiga passar pelo obstáculo, ele deve emitir um alerta para a central passando esses mesmos dados e depois seguir para o próximo ponto.
+
+
+ Controle Manual:
+ A qualquer momento durante a execução da missão, deve ser possível que o controle do comportamento do drone seja assumido diretamente pela GCS, com isso, ele passará a executar todos os comandos enviados diretamente. Contudo, durante esse estado, caso algum problema físico no drone aconteça, isso deve interromper seu comportamento.
+
+
+ Drone:
+ Todo drone deve conter uma série de sensores (GPS, IMU, Barômetro, outros) e uma bateria. A bateria começa em 100 e deve cair em 1 a cada transição executada. Caso a bateria chegue em 30%, um aviso deve ser emitido para a GCS. Caso ele chegue em 20%, ele deve acionar o modo de retorno para casa automaticamente.

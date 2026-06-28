@@ -1,5 +1,5 @@
 -- 1. Definições de Tipos e Constantes
-DRONES = {1..2}
+DRONES = {1..1}
 POS = {1..2}
 ROT = {1..2}
 
@@ -59,7 +59,7 @@ DroneSeek(id) =
     (
         DroneSeek(id) 
         |~| 
-        target_lost.id -> tg_lost_alert.id -> receiveMission.id?nova_m -> DroneOper(id, nova_m)
+        target_lost.id -> tg_lost_alert.id -> DroneAbort(id)
     )
 
 -- TEST: Movimentos padrão, volta pra casa e finaliza graciosamente com SKIP
@@ -92,27 +92,25 @@ DroneError(id, erro) =
     else 
         alert_gcs.id -> STOP 
 
----
-
 -- 6. Estação de Controle de Solo (GCS)
 GCS(id) = 
     waiting_mission.id -> receiveMission.id!GUARD -> GCS_Ativa(id)
 
 GCS_Ativa(id) = 
     -- Se o drone alertar algo na patrulha, ordena o ataque (Interrupção)
-    alert_gcs.id -> interrupt_mission.id!FIGHT -> GCS_Ativa(id)
+    alert_gcs.id -> interrupt_mission.id!FIGHT -> SKIP
     []
-    tg_lost_alert.id > interrupt_mission.id!ABORT -> GCS(id)
+    tg_lost_alert.id -> interrupt_mission.id!ABORT -> SKIP
     -- A GCS também pode decidir aleatoriamente testar o drone a qualquer momento
     []
-    interrupt_mission.id!TEST -> GCS(id)
+    interrupt_mission.id!TEST -> SKIP
     []
     -- Permite reconfiguração normal caso solicitada no modo SEEK
     receiveMission.id!SEEK -> GCS_Ativa(id)
 
 -- 7. Sistema Completo (Composição Paralela)
 -- Sincroniza o Drone e a GCS nos canais de comunicação compartilhados
-AlphaDrone = {| waiting_mission, receiveMission, interrupt_mission, alert_gcs |}
+AlphaDrone = {| waiting_mission, receiveMission, interrupt_mission, alert_gcs, tg_lost_alert |}
 
 -- Enxame intercalado (5 drones operando paralelamente sem se bloquearem)
 Swarm = ||| id:DRONES @ Drone(id, SUCESSO, SUCESSO, SUCESSO, SUCESSO)
@@ -120,8 +118,13 @@ Swarm = ||| id:DRONES @ Drone(id, SUCESSO, SUCESSO, SUCESSO, SUCESSO)
 -- GCS intercalada (GCS gerenciando os 5 drones independentemente)
 GroundControl = ||| id:DRONES @ GCS(id)
 
-Sistema = Swarm [ AlphaDrone || AlphaDrone ] GroundControl
+Sistema = Swarm [| AlphaDrone |] GroundControl
 
 assert Sistema :[deterministic]
 assert Sistema :[deadlock free]
 assert Sistema :[divergence free]
+
+
+O que eu quero observar, o que eu quero demonstrar? Por exemplo, um atacante chuta e só me dá os dois resultados, acertou ou errou? Ou você quer demonstrar o que afetaria isso e quando daria certo ou errado?
+
+Onde o CSP pode agregar valor?
