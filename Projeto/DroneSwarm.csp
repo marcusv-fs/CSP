@@ -16,7 +16,7 @@ datatype OBSTACLE = NONE | PASSABLE | IMPASSABLE
 -- ==========================================
 -- Canais de Comunicação
 -- ==========================================
-channel test, takeoff, land, return_home, alert_low_batt, move, alert_impassable
+channel test, takeoff, land, return_home, alert_low_batt, move, alert_impassable, take_control, manual_cmd, physical_problem, abort_manual
 channel recharge : {1 .. MAX_BAT}
 channel receive_mission : MISSION_STEPS
 channel check_status, report_error : STATUS
@@ -41,48 +41,60 @@ DroneReady(id, batt, status, rssi) =
 
 DroneStep(id, batt, m_steps, status, rssi) = 
     if batt == 0 then STOP
-    else check_status?new_status -> 
-        if (new_status == OK) then 
-            ping_gcs?new_rssi -> 
-                if (new_rssi < 7) then  
-                    if (batt > 6) then ExecMStep(id, batt - 1, m_steps, new_status, new_rssi) 
-                    else if (batt > 4) then alert_low_batt -> ExecMStep(id, batt - 1, m_steps, new_status, new_rssi)
-                    else report_error!CRITICAL_BATT -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
-                else report_error!LOW_QUALITY_COMMS -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
-        else report_error!new_status -> land -> Drone(id, batt) 
+    else 
+        (
+            check_status?new_status -> 
+                if (new_status == OK) then 
+                    ping_gcs?new_rssi -> 
+                        if (new_rssi < 7) then  
+                            if (batt > 6) then ExecMStep(id, batt - 1, m_steps, new_status, new_rssi) 
+                            else if (batt > 4) then alert_low_batt -> ExecMStep(id, batt - 1, m_steps, new_status, new_rssi)
+                            else report_error!CRITICAL_BATT -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
+                        else report_error!LOW_QUALITY_COMMS -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
+                else report_error!new_status -> land -> Drone(id, batt) 
+        )
+        [> take_control -> ManualControl(id, batt, status, rssi) -- Interrupção!
 
 ExecMStep(id, batt, m_steps, status, rssi) = 
-    if m_steps > 0 then 
-        check_obstacle?obs -> -- Drone checa seus sensores antes de avançar
-            if (obs == IMPASSABLE) then 
-                alert_impassable -> DroneStep(id, batt, m_steps - 1, status, rssi) -- Avisa GCS e pula o ponto
-            else 
-                move -> DroneStep(id, batt, m_steps - 1, status, rssi) -- Avança fisicamente
-    else 
-        report_gcs!MISSION_FINISHED -> return_home -> land -> Drone(id, batt - 1)
+    (
+        if m_steps > 0 then 
+            check_obstacle?obs -> 
+                if (obs == IMPASSABLE) then 
+                    alert_impassable -> DroneStep(id, batt, m_steps - 1, status, rssi) 
+                else 
+                    move -> DroneStep(id, batt, m_steps - 1, status, rssi) 
+        else 
+            report_gcs!MISSION_FINISHED -> return_home -> land -> Drone(id, batt - 1)
+    )
+    [> take_control -> ManualControl(id, batt, status, rssi) -- Interrupção!
+
+-- NOVO: O Processo de Controle Manual e tratamento da falha física
+ManualControl(id, batt, status, rssi) =
+    if batt == 0 then STOP
+    else
+        (manual_cmd -> ManualControl(id, batt - 1, status, rssi))
+        []
+        (physical_problem -> abort_manual -> land -> Drone(id, batt - 1))
 
 -- ==========================================
 -- Processos da Ground Control Station (GCS)
 -- ==========================================
 GCS = 
     connect_to_gcs?rssi -> GCS
-    []
-    receive_mission?steps -> GCS
-    []
-    ping_gcs?rssi -> GCS
-    []
-    alert_low_batt -> GCS
-    []
-    report_error?err -> GCS
-    []
-    report_gcs?status -> GCS
-    []
-    alert_impassable -> GCS 
+    [] receive_mission?steps -> GCS
+    [] ping_gcs?rssi -> GCS
+    [] alert_low_batt -> GCS
+    [] report_error?err -> GCS
+    [] report_gcs?status -> GCS
+    [] alert_impassable -> GCS
+    [] take_control -> GCS
+    [] manual_cmd -> GCS
+    [] abort_manual -> GCS
 
 -- ==========================================
 -- Sistema Principal
 -- ==========================================
-SYNC_CHANNELS = {| connect_to_gcs, receive_mission, ping_gcs, alert_low_batt, report_error, report_gcs, alert_impassable |}
+SYNC_CHANNELS = {| connect_to_gcs, receive_mission, ping_gcs, alert_low_batt, report_error, report_gcs, alert_impassable, take_control, manual_cmd, abort_manual |}
 
 Sistema = Drone(0, 10) [| SYNC_CHANNELS |] GCS
 
