@@ -9,7 +9,7 @@ ID = {0..5}
 RSSI = {0..10} 
 MISSION_STEPS = {0..30}
 
-datatype STATUS = OK | LOST_COMMS | LOW_QUALITY_COMMS | LOST_GPS | IMU_FAIL | INTERNAL_ERROR | CRITICAL_BATT
+datatype STATUS = OK | LOST_COMMS | LOW_QUALITY_COMMS | LOST_GPS | IMU_FAIL | INTERNAL_ERROR
 datatype MISSION_STATUS = MISSION_FINISHED | MISSION_FAILED
 datatype OBSTACLE = NONE | PASSABLE | IMPASSABLE 
 
@@ -47,16 +47,14 @@ ELEC(batt) =
 
 ELEC_NORMAL(batt) =
     consume_bat -> ELEC(batt-1)
-    []
-    batt < MAX_BAT & recharge?val:{1 .. (MAX_BAT - batt)} -> ELEC(batt+val)
+    [] batt < MAX_BAT & recharge?val:{1 .. (MAX_BAT - batt)} -> ELEC(batt+val)
 
 ELEC_LOW(batt) =
     if batt == 0 then STOP
     else
         consume_bat -> ELEC_LOW(batt-1)
-        []
         -- Se recarregar, volta para o processo principal para reavaliar a tensão
-        batt < MAX_BAT & recharge?val:{1 .. (MAX_BAT - batt)} -> ELEC(batt+val) 
+        [] batt < MAX_BAT & recharge?val:{1 .. (MAX_BAT - batt)} -> ELEC(batt+val) 
 
 -- ==========================================
 -- 2. SISTEMA DE SENSORES (SENS)
@@ -64,71 +62,51 @@ ELEC_LOW(batt) =
 -- Representa o Hardware lendo o mundo físico continuamente.
 SENS = 
     check_status?s -> SENS
-    []
-    check_obstacle?obs -> SENS
-    []
-    physical_problem -> SENS
+    [] check_obstacle?obs -> SENS
+    [] physical_problem -> SENS
 
 -- ==========================================
 -- 3. SISTEMA DE COMUNICAÇÃO (COMM)
 -- ==========================================
--- Agora atua como uma Máquina de Estados de Rede
-
 COMM = COMM_DISCONNECTED
 
 -- Estado Inicial: Sem conexão com a GCS
-COMM_DISCONNECTED = 
-    connect_to_gcs?rssi -> COMM_CONNECTED
-    [] 
-    -- Avisa dos problemas, mesmo que ninguém ouça (mas isso pode ser exibido no drone físico)
-    report_error?err -> COMM_DISCONNECTED
-    [] 
-    alert_low_batt -> COMM_DISCONNECTED
+COMM_DISCONNECTED = connect_to_gcs?rssi -> COMM_CONNECTED
 
 -- Estado Operacional: Conectado e roteando todos os comandos
 COMM_CONNECTED = 
     ping_gcs?rssi -> COMM_CONNECTED
-    [] 
-    receive_mission?m_steps -> COMM_CONNECTED
-    [] 
-    take_control -> COMM_CONNECTED
-    [] 
-    manual_cmd -> COMM_CONNECTED
-    [] 
-    alert_impassable -> COMM_CONNECTED
-    [] 
-    report_gcs?st -> COMM_CONNECTED
-    [] 
-    report_error?err -> COMM_CONNECTED
-    [] 
-    alert_low_batt -> COMM_CONNECTED
-    [] 
-    abort_manual -> COMM_CONNECTED
+    [] receive_mission?m_steps -> COMM_CONNECTED
+    [] take_control -> COMM_CONNECTED
+    [] manual_cmd -> COMM_CONNECTED
+    [] alert_impassable -> COMM_CONNECTED
+    [] report_gcs?st -> COMM_CONNECTED
+    [] report_error?err -> COMM_CONNECTED
+    [] alert_low_batt -> COMM_CONNECTED
+    [] abort_manual -> COMM_CONNECTED
 
 -- ==========================================
 -- 4. SISTEMA DE CONTROLE / AUTOPILOTO (CONTROL)
 -- ==========================================
 CONTROL =
-    check_status?s -> 
-        if s == OK then connect_to_gcs?rssi -> CTRL_WAIT
-        else report_error!s -> CONTROL
+    connect_to_gcs?rssi -> CTRL_INIT
+
+CTRL_INIT =
+    check_status?s ->
+        if s == OK then CTRL_WAIT
+        else report_error!s -> CTRL_INIT
 
 CTRL_WAIT =
     test -> consume_bat -> CTRL_WAIT
-    []
-    receive_mission?m_steps -> takeoff -> consume_bat -> CTRL_FLY(m_steps)
-    []
-    batt_critical_rth -> CTRL_WAIT
-    []
-    take_control -> DO_MANUAL -- Permite assumir o controle mesmo com o drone no chão
+    [] receive_mission?m_steps -> takeoff -> consume_bat -> CTRL_FLY(m_steps)
+    [] batt_critical_rth -> CTRL_WAIT
+    [] take_control -> DO_MANUAL -- Permite assumir o controle mesmo com o drone no chão
 
 CTRL_FLY(m) = 
     -- 1. Checagem de Interrupções no topo do ciclo (Avionics Loop)
     take_control -> DO_MANUAL
-    []
-    batt_critical_rth -> DO_RTH
-    []
-    -- 2. Lógica normal de voo caso não haja interrupções
+    [] batt_critical_rth -> DO_RTH
+    [] -- 2. Lógica normal de voo caso não haja interrupções
     (
         if m == 0 then 
             report_gcs!MISSION_FINISHED -> return_home -> consume_bat -> land -> CTRL_WAIT
@@ -145,10 +123,8 @@ CTRL_FLY(m) =
 
 DO_MANUAL =
     manual_cmd -> consume_bat -> DO_MANUAL
-    []
-    physical_problem -> abort_manual -> land -> CTRL_WAIT
-    []
-    batt_critical_rth -> DO_RTH
+    [] physical_problem -> abort_manual -> land -> CTRL_WAIT
+    [] batt_critical_rth -> DO_RTH
 
 DO_RTH =
     return_home -> consume_bat -> land -> CTRL_WAIT
@@ -172,23 +148,74 @@ SYS_1 = CONTROL [| SYNC_CTRL_COMM |] COMM
 SYS_2 = SYS_1 [| SYNC_CTRL_SENS |] SENS
 DRONE_PARALLEL = SYS_2 [| union(SYNC_CTRL_ELEC, SYNC_COMM_ELEC) |] ELEC(10)
 
+-- ==========================================
+-- GCS - CONNECTION
+-- ==========================================
+SYNC_CONN = {| connect_to_gcs, ping_gcs |}
+
+GCS_CONN =
+    connect_to_gcs?rssi -> GCS_CONNECTED
+
+GCS_CONNECTED =
+    ping_gcs?rssi -> GCS_CONNECTED
 
 -- ==========================================
--- SISTEMA EXTERNO: A GROUND CONTROL STATION
+-- GCS - MODE
 -- ==========================================
-GCS = 
-    connect_to_gcs?rssi -> GCS
-    [] ping_gcs?rssi -> GCS
-    [] receive_mission?steps -> GCS
-    [] alert_low_batt -> GCS
-    [] report_error?err -> GCS
-    [] report_gcs?status -> GCS
-    [] alert_impassable -> GCS
-    [] take_control -> GCS
-    [] manual_cmd -> GCS
-    [] abort_manual -> GCS
+SYNC_MODE = {| receive_mission, report_gcs, alert_impassable, take_control, manual_cmd, abort_manual |}
 
-SYNC_DRONE_GCS = {| connect_to_gcs, receive_mission, ping_gcs, alert_low_batt, report_error, report_gcs, alert_impassable, take_control, manual_cmd, abort_manual |}
+GCS_MODE = GCS_IDLE
+
+GCS_IDLE =
+    receive_mission?steps -> GCS_MISSION
+    [] take_control -> GCS_MANUAL
+
+GCS_MISSION =
+    report_gcs?status -> GCS_IDLE
+    [] alert_impassable -> GCS_MISSION
+    [] take_control -> GCS_MANUAL
+
+GCS_MANUAL =
+    manual_cmd -> GCS_MANUAL
+    [] abort_manual -> GCS_IDLE
+
+-- ==========================================
+-- GCS - ALARMS
+-- ==========================================
+SYNC_ALARM = {| alert_low_batt, report_error |}
+
+GCS_ALARM = GCS_NORMAL
+
+GCS_NORMAL =
+    alert_low_batt -> GCS_LOW_BATT
+    [] report_error?err -> GCS_ERROR(err)
+
+GCS_LOW_BATT =
+    alert_low_batt -> GCS_LOW_BATT
+    [] report_error?err -> GCS_ERROR(err)
+
+GCS_ERROR(err) =
+    report_error?e -> GCS_ERROR(e)
+
+-- ==========================================
+-- GCS
+-- ==========================================
+GCS_1 = GCS_CONN [|{}|] GCS_MODE
+GCS = GCS_1 [|{}|] GCS_ALARM
+
+SYNC_DRONE_GCS =
+{|
+    connect_to_gcs,
+    ping_gcs,
+    receive_mission,
+    report_gcs,
+    alert_impassable,
+    take_control,
+    manual_cmd,
+    abort_manual,
+    alert_low_batt,
+    report_error
+|}
 
 Sistema = DRONE_PARALLEL [| SYNC_DRONE_GCS |] GCS
 
