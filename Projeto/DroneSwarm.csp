@@ -1,7 +1,7 @@
 -- ==========================================
 -- Tipos e Constantes
 -- ==========================================
-MAX_BAT = 20 --Tamanho bateria
+MAX_BAT = 20 -- Tamanho bateria
 WARN_BAT = 6 -- Aviso de bateria fraca
 RTH_BAT = 4 -- Interromper operação e voltar para casa
 MAX_PRT_PTS = 5  -- Máximo de pontos da patrulha
@@ -11,54 +11,61 @@ MISSION_STEPS = {0..30}
 
 datatype STATUS = OK | LOST_COMMS | LOW_QUALITY_COMMS | LOST_GPS | IMU_FAIL | INTERNAL_ERROR | CRITICAL_BATT
 datatype MISSION_STATUS = MISSION_FINISHED | MISSION_FAILED
+datatype OBSTACLE = NONE | PASSABLE | IMPASSABLE 
 
 -- ==========================================
 -- Canais de Comunicação
 -- ==========================================
-channel test, takeoff, land, return_home, alert_low_batt, exec_step
+channel test, takeoff, land, return_home, alert_low_batt, move, alert_impassable
 channel recharge : {1 .. MAX_BAT}
-channel receive_mission, gcs_send_mission : MISSION_STEPS
+channel receive_mission : MISSION_STEPS
 channel check_status, report_error : STATUS
 channel connect_to_gcs, ping_gcs : RSSI
 channel report_gcs: MISSION_STATUS
+channel check_obstacle : OBSTACLE 
 
 -- ==========================================
 -- Processos do Drone
 -- ==========================================
 Drone(id, batt) =
-    check_status?status -> 
-        if (status == OK) then connect_to_gcs?rssi -> DroneReady(id, batt, status, rssi)
-        else report_error!status -> Drone(id, batt)
+    check_status?curr_status -> 
+        if (curr_status == OK) then connect_to_gcs?rssi -> DroneReady(id, batt, curr_status, rssi)
+        else report_error!curr_status -> Drone(id, batt)
 
 DroneReady(id, batt, status, rssi) =
-    batt > 4 &test -> DroneReady(id, batt-1, status, rssi) -- Testar partes do drone
+    batt > 4 & test -> DroneReady(id, batt-1, status, rssi)
     []
-    batt < MAX_BAT & recharge?val:{1 .. (MAX_BAT - batt)} -> DroneReady(id, batt + val, status, rssi) -- Recarregar o drone
+    batt < MAX_BAT & recharge?val:{1 .. (MAX_BAT - batt)} -> DroneReady(id, batt + val, status, rssi)
     []
-    batt > 4 & receive_mission?m_steps -> takeoff -> DroneStep(id, batt, m_steps, status, rssi) -- Executar missão
+    batt > 4 & receive_mission?m_steps -> takeoff -> DroneStep(id, batt, m_steps, status, rssi)
 
 DroneStep(id, batt, m_steps, status, rssi) = 
     if batt == 0 then STOP
-    else check_status?new_status -> -- Recebe um novo status (simulando que o drone pode dar erro a qualquer momento) 
-            if (new_status == OK) then ping_gcs?new_rssi -> -- Checa se o status está ok 
-                if (new_rssi < 7) then  -- Se a comunicação está ok
-                    if (batt > 6) then ExecMStep(id, batt - 1, m_steps, new_status, new_rssi) -- checa se a bateria está ok
+    else check_status?new_status -> 
+        if (new_status == OK) then 
+            ping_gcs?new_rssi -> 
+                if (new_rssi < 7) then  
+                    if (batt > 6) then ExecMStep(id, batt - 1, m_steps, new_status, new_rssi) 
                     else if (batt > 4) then alert_low_batt -> ExecMStep(id, batt - 1, m_steps, new_status, new_rssi)
                     else report_error!CRITICAL_BATT -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
                 else report_error!LOW_QUALITY_COMMS -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
-            else report_error!new_status -> return_home -> land -> Drone(id, batt - 1)
+        else report_error!new_status -> land -> Drone(id, batt) 
 
 ExecMStep(id, batt, m_steps, status, rssi) = 
-    if m_steps > 0 then exec_step -> DroneStep(id, batt, m_steps - 1, status, rssi)
-    else report_gcs!MISSION_FINISHED -> return_home -> land -> Drone(id, batt -1)
+    if m_steps > 0 then 
+        check_obstacle?obs -> -- Drone checa seus sensores antes de avançar
+            if (obs == IMPASSABLE) then 
+                alert_impassable -> DroneStep(id, batt, m_steps - 1, status, rssi) -- Avisa GCS e pula o ponto
+            else 
+                move -> DroneStep(id, batt, m_steps - 1, status, rssi) -- Avança fisicamente
+    else 
+        report_gcs!MISSION_FINISHED -> return_home -> land -> Drone(id, batt - 1)
 
 -- ==========================================
 -- Processos da Ground Control Station (GCS)
 -- ==========================================
 GCS = 
     connect_to_gcs?rssi -> GCS
-    []
-    gcs_send_mission?steps -> GCS
     []
     receive_mission?steps -> GCS
     []
@@ -69,16 +76,14 @@ GCS =
     report_error?err -> GCS
     []
     report_gcs?status -> GCS
+    []
+    alert_impassable -> GCS 
 
 -- ==========================================
 -- Sistema Principal
 -- ==========================================
--- Definimos o "Alfabeto de Sincronização". Estes são os canais que o Drone
--- não pode executar sozinho; ele OBRIGATORIAMENTE precisa que a GCS esteja 
--- escutando para que a ação aconteça.
-SYNC_CHANNELS = {| connect_to_gcs, receive_mission, ping_gcs, alert_low_batt, report_error, report_gcs |}
+SYNC_CHANNELS = {| connect_to_gcs, receive_mission, ping_gcs, alert_low_batt, report_error, report_gcs, alert_impassable |}
 
--- Colocamos o Drone e a GCS rodando ao mesmo tempo, sincronizados pelos canais acima.
 Sistema = Drone(0, 10) [| SYNC_CHANNELS |] GCS
 
 -- ==========================================
