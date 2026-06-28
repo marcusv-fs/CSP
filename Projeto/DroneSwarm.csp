@@ -17,7 +17,7 @@ datatype MISSION_STATUS = MISSION_FINISHED | MISSION_FAILED
 -- ==========================================
 channel test, takeoff, land, return_home, alert_low_batt, exec_step
 channel recharge : {1 .. MAX_BAT}
-channel receive_mission : MISSION_STEPS
+channel receive_mission, gcs_send_mission : MISSION_STEPS
 channel check_status, report_error : STATUS
 channel connect_to_gcs, ping_gcs : RSSI
 channel report_gcs: MISSION_STATUS
@@ -46,7 +46,7 @@ DroneStep(id, batt, m_steps, status, rssi) =
                     else if (batt > 4) then alert_low_batt -> ExecMStep(id, batt - 1, m_steps, new_status, new_rssi)
                     else report_error!CRITICAL_BATT -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
                 else report_error!LOW_QUALITY_COMMS -> return_home -> land -> DroneReady(id, batt - 1, new_status, new_rssi)
-            else report_error!new_status -> Drone(id, batt)
+            else report_error!new_status -> return_home -> land -> Drone(id, batt - 1)
 
 ExecMStep(id, batt, m_steps, status, rssi) = 
     if m_steps > 0 then exec_step -> DroneStep(id, batt, m_steps - 1, status, rssi)
@@ -55,16 +55,35 @@ ExecMStep(id, batt, m_steps, status, rssi) =
 -- ==========================================
 -- Processos da Ground Control Station (GCS)
 -- ==========================================
-
+GCS = 
+    connect_to_gcs?rssi -> GCS
+    []
+    gcs_send_mission?steps -> GCS
+    []
+    receive_mission?steps -> GCS
+    []
+    ping_gcs?rssi -> GCS
+    []
+    alert_low_batt -> GCS
+    []
+    report_error?err -> GCS
+    []
+    report_gcs?status -> GCS
 
 -- ==========================================
 -- Sistema Principal
 -- ==========================================
-Sistema = Drone(0, 10)
+-- Definimos o "Alfabeto de Sincronização". Estes são os canais que o Drone
+-- não pode executar sozinho; ele OBRIGATORIAMENTE precisa que a GCS esteja 
+-- escutando para que a ação aconteça.
+SYNC_CHANNELS = {| connect_to_gcs, receive_mission, ping_gcs, alert_low_batt, report_error, report_gcs |}
 
+-- Colocamos o Drone e a GCS rodando ao mesmo tempo, sincronizados pelos canais acima.
+Sistema = Drone(0, 10) [| SYNC_CHANNELS |] GCS
+
+-- ==========================================
 -- Asserções e Refinamentos (Testes do FDR4)
 -- ==========================================
-
 assert Sistema :[deterministic]
 assert Sistema :[deadlock free]
 assert Sistema :[divergence free]
