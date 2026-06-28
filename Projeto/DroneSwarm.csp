@@ -72,18 +72,38 @@ SENS =
 -- ==========================================
 -- 3. SISTEMA DE COMUNICAÇÃO (COMM)
 -- ==========================================
--- Roteador de telemetria. (Poderia ter estados de ONLINE/OFFLINE aqui no futuro)
-COMM = 
-    connect_to_gcs?rssi -> COMM
-    [] ping_gcs?rssi -> COMM
-    [] receive_mission?m_steps -> COMM
-    [] take_control -> COMM
-    [] manual_cmd -> COMM
-    [] alert_impassable -> COMM
-    [] report_gcs?st -> COMM
-    [] report_error?err -> COMM
-    [] alert_low_batt -> COMM
-    [] abort_manual -> COMM
+-- Agora atua como uma Máquina de Estados de Rede
+
+COMM = COMM_DISCONNECTED
+
+-- Estado Inicial: Sem conexão com a GCS
+COMM_DISCONNECTED = 
+    connect_to_gcs?rssi -> COMM_CONNECTED
+    [] 
+    -- Avisa dos problemas, mesmo que ninguém ouça (mas isso pode ser exibido no drone físico)
+    report_error?err -> COMM_DISCONNECTED
+    [] 
+    alert_low_batt -> COMM_DISCONNECTED
+
+-- Estado Operacional: Conectado e roteando todos os comandos
+COMM_CONNECTED = 
+    ping_gcs?rssi -> COMM_CONNECTED
+    [] 
+    receive_mission?m_steps -> COMM_CONNECTED
+    [] 
+    take_control -> COMM_CONNECTED
+    [] 
+    manual_cmd -> COMM_CONNECTED
+    [] 
+    alert_impassable -> COMM_CONNECTED
+    [] 
+    report_gcs?st -> COMM_CONNECTED
+    [] 
+    report_error?err -> COMM_CONNECTED
+    [] 
+    alert_low_batt -> COMM_CONNECTED
+    [] 
+    abort_manual -> COMM_CONNECTED
 
 -- ==========================================
 -- 4. SISTEMA DE CONTROLE / AUTOPILOTO (CONTROL)
