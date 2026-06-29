@@ -107,21 +107,22 @@ CTRL_FLY(id, m_steps) =
     []
     (
         if m_steps == 0 then
-            report_gcs.id!MISSION_FINISHED -> return_home.id -> consume_bat.id -> land.id ->CTRL_WAIT(id)
+            report_gcs.id!MISSION_FINISHED -> DO_RTH(id)
         else
             check_status.id?status ->
                 if status == OK then check_obstacle.id?obs ->
                     if obs == IMPASSABLE then alert_impassable.id -> CTRL_FLY(id, m_steps - 1)
                     else move.id -> consume_bat.id -> CTRL_FLY(id, m_steps - 1)
-                else report_error.id!status -> return_home.id -> consume_bat.id -> land.id -> CTRL_WAIT(id)
+                else report_error.id!status -> DO_RTH(id)
     )
 
 DO_MANUAL(id) =
     manual_cmd.id -> consume_bat.id -> DO_MANUAL(id)
-    [] physical_problem.id -> abort_manual.id -> land.id -> CTRL_WAIT(id)
+    [] physical_problem.id -> abort_manual.id -> land.id -> consume_bat.id -> CTRL_WAIT(id)
+    [] abort_manual.id -> land.id -> consume_bat.id -> CTRL_WAIT(id)
 
 DO_RTH(id) =
-    return_home.id -> consume_bat.id -> land.id -> CTRL_WAIT(id)
+    return_home.id -> consume_bat.id -> land.id -> consume_bat.id -> CTRL_WAIT(id)
 
 -- ==========================================
 -- COMPOSIÇÃO PARALELA DO DRONE
@@ -207,7 +208,8 @@ assert Sistema :[deterministic]
 assert Sistema :[deadlock free]
 assert Sistema :[divergence free]
 
--- Depois que o operador assume o controle (take_control), nenhum comando automático de navegação (move, return_home, takeoff) pode ocorrer até que o controle seja devolvido (abort_manual).
+-- Depois que o operador assume o controle (take_control), nenhum comando automático de navegação 
+-- (move, return_home, takeoff) pode ocorrer até que o controle seja devolvido (abort_manual).
 OPERATOR_EXCLUSIVE(id) = AUTO(id)
 
 AUTO(id) =
@@ -230,7 +232,8 @@ HIDDEN = diff(Events, VISIBLE)
 
 assert OPERATOR_EXCLUSIVE(0) [T= (Sistema_Uni \ HIDDEN)
 
--- Toda falha leva a uma recuperação segura, que consiste em reportar o erro e, em seguida, executar uma das políticas de recuperação: pousar imediatamente ou retornar para casa e pousar.
+-- Toda falha leva a uma recuperação segura, que consiste em reportar o erro e, em seguida,
+-- executar uma das políticas de recuperação: pousar imediatamente ou retornar para casa e pousar.
 RECOVERY_POLICY(id) =
     report_error.id?e -> RECOVERY_POLICY(id)
     []return_home.id -> land.id -> RECOVERY_POLICY(id)
@@ -242,7 +245,8 @@ HIDDEN2 = diff(Events, VISIBLE2)
 
 assert RECOVERY_POLICY(0) [T= (Sistema_Uni \ HIDDEN2)
 
--- Uma missão sempre termina de forma segura: ou ela termina e volta pra casa normalmente, ou uma política de recuperação é executada.
+-- Uma missão sempre termina de forma segura: ou ela termina e volta pra casa normalmente, ou uma
+-- política de recuperação é executada.
 
 MISSION_TERMINATION(id) =
     receive_mission.id?m -> EXEC(id)
