@@ -119,7 +119,6 @@ CTRL_FLY(id, m_steps) =
 DO_MANUAL(id) =
     manual_cmd.id -> consume_bat.id -> DO_MANUAL(id)
     [] physical_problem.id -> abort_manual.id -> land.id -> CTRL_WAIT(id)
-    [] batt_critical_rth.id -> DO_RTH(id)
 
 DO_RTH(id) =
     return_home.id -> consume_bat.id -> land.id -> CTRL_WAIT(id)
@@ -198,9 +197,35 @@ SYNC_DRONE_GCS = {| connect_to_gcs, ping_gcs, receive_mission, report_gcs,
 
 Sistema = DRONES [| SYNC_DRONE_GCS |] GCS
 
+Sistema_Uni = DRONE(0) [| SYNC_DRONE_GCS |] GCS
+
+
 -- ==========================================
 -- Asserções e Refinamentos (Testes do FDR4)
 -- ==========================================
 assert Sistema :[deterministic]
 assert Sistema :[deadlock free]
 assert Sistema :[divergence free]
+
+-- Depois que o operador assume o controle (take_control), nenhum comando automático de navegação (move, return_home, takeoff) pode ocorrer até que o controle seja devolvido (abort_manual).
+OPERATOR_EXCLUSIVE(id) = AUTO(id)
+
+AUTO(id) =
+    connect_to_gcs.id?r -> AUTO(id)
+    [] receive_mission.id?m -> AUTO(id)
+    [] move.id -> AUTO(id)
+    [] takeoff.id -> AUTO(id)
+    [] return_home.id -> AUTO(id)
+    [] report_gcs.id?s -> AUTO(id)
+    [] take_control.id -> MANUAL(id)
+
+MANUAL(id) =
+    manual_cmd.id -> MANUAL(id)
+    [] abort_manual.id -> AUTO(id)
+
+VISIBLE = {| connect_to_gcs, receive_mission, take_control, manual_cmd,
+            abort_manual, move, takeoff, return_home, report_gcs |}
+
+HIDDEN = diff(Events, VISIBLE)
+
+assert OPERATOR_EXCLUSIVE(0) [T= (Sistema_Uni \ HIDDEN)
