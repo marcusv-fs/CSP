@@ -18,14 +18,13 @@ datatype OBSTACLE = NONE | PASSABLE | IMPASSABLE
 -- ==========================================
 
 -- Eventos físicos
-channel test, takeoff, land, return_home, move
-channel recharge : {1..MAX_BAT}
-channel consume_bat, batt_critical_rth
+channel test, takeoff, land, return_home, move, consume_bat, batt_critical_rth : ID
+channel recharge : ID.{1..MAX_BAT}
 
 -- Sensores (internos ao drone)
-channel check_status : STATUS
-channel check_obstacle : OBSTACLE
-channel physical_problem
+channel check_status : ID.STATUS
+channel check_obstacle : ID.OBSTACLE
+channel physical_problem : ID
 
 -- Comunicação Drone <-> GCS
 channel connect_to_gcs : ID.RSSI
@@ -43,26 +42,28 @@ ELEC(id, batt) =
     else if batt == WARN_BAT then
         alert_low_batt.id -> ELEC_NORMAL(id, batt)
     else if batt == RTH_BAT then
-        batt_critical_rth -> ELEC_LOW(id, batt)
+        batt_critical_rth.id -> ELEC_LOW(id, batt)
     else ELEC_NORMAL(id, batt)
 
 ELEC_NORMAL(id, batt) =
-    consume_bat -> ELEC(id, batt-1)
-    [] batt < MAX_BAT & recharge?val:{1..(MAX_BAT-batt)} -> ELEC(id, batt+val)
+    consume_bat.id -> ELEC(id, batt-1)
+    [] batt < MAX_BAT & recharge.id?val:{1..(MAX_BAT-batt)} -> ELEC(id, batt+val)
 
 ELEC_LOW(id, batt) =
     if batt == 0 then STOP
     else
-        consume_bat -> ELEC_LOW(id, batt-1)
-        [] batt < MAX_BAT & recharge?val:{1..(MAX_BAT-batt)} -> ELEC(id, batt+val)
+        consume_bat.id -> ELEC_LOW(id, batt-1)
+        [] batt < MAX_BAT & recharge.id?val:{1..(MAX_BAT-batt)} -> ELEC(id, batt+val)
 
 -- ==========================================
 -- 2. SISTEMA DE SENSORES (SENS)
 -- ==========================================
-SENS =
-    check_status?status -> SENS
-    [] check_obstacle?obs -> SENS
-    [] physical_problem -> SENS
+SENS(id) =
+    check_status.id?status -> SENS(id)
+    []
+    check_obstacle.id?obs -> SENS(id)
+    []
+    physical_problem.id -> SENS(id)
 
 -- ==========================================
 -- 3. SISTEMA DE COMUNICAÇÃO (COMM)
@@ -90,38 +91,38 @@ CONTROL(id) =
     connect_to_gcs.id?rssi -> CTRL_INIT(id)
 
 CTRL_INIT(id) =
-    check_status?status ->
+    check_status.id?status ->
         if status == OK then CTRL_WAIT(id)
         else report_error.id!status -> CTRL_INIT(id)
 
 CTRL_WAIT(id) =
-    test -> consume_bat -> CTRL_WAIT(id)
-    [] receive_mission.id?m_steps -> takeoff -> consume_bat -> CTRL_FLY(id, m_steps)
-    [] batt_critical_rth -> CTRL_WAIT(id)
+    test.id -> consume_bat.id -> CTRL_WAIT(id)
+    [] receive_mission.id?m_steps -> takeoff.id -> consume_bat.id -> CTRL_FLY(id, m_steps)
+    [] batt_critical_rth.id -> CTRL_WAIT(id)
     [] take_control.id -> DO_MANUAL(id)
 
 CTRL_FLY(id, m_steps) =
     take_control.id -> DO_MANUAL(id)
-    [] batt_critical_rth -> DO_RTH(id)
+    [] batt_critical_rth.id -> DO_RTH(id)
     []
     (
         if m_steps == 0 then
-            report_gcs.id!MISSION_FINISHED -> return_home -> consume_bat -> land ->CTRL_WAIT(id)
+            report_gcs.id!MISSION_FINISHED -> return_home.id -> consume_bat.id -> land.id ->CTRL_WAIT(id)
         else
-            check_status?status -> 
-                if status == OK then check_obstacle?obs ->
+            check_status.id?status ->
+                if status == OK then check_obstacle.id?obs ->
                     if obs == IMPASSABLE then alert_impassable.id -> CTRL_FLY(id, m_steps - 1)
-                    else move -> consume_bat -> CTRL_FLY(id, m_steps - 1)
-                else report_error.id!status -> return_home -> consume_bat -> land -> CTRL_WAIT(id)
+                    else move.id -> consume_bat.id -> CTRL_FLY(id, m_steps - 1)
+                else report_error.id!status -> return_home.id -> consume_bat.id -> land.id -> CTRL_WAIT(id)
     )
 
 DO_MANUAL(id) =
-    manual_cmd.id -> consume_bat -> DO_MANUAL(id)
-    [] physical_problem -> abort_manual.id -> land -> CTRL_WAIT(id)
-    [] batt_critical_rth -> DO_RTH(id)
+    manual_cmd.id -> consume_bat.id -> DO_MANUAL(id)
+    [] physical_problem.id -> abort_manual.id -> land.id -> CTRL_WAIT(id)
+    [] batt_critical_rth.id -> DO_RTH(id)
 
 DO_RTH(id) =
-    return_home -> consume_bat -> land -> CTRL_WAIT(id)
+    return_home.id -> consume_bat.id -> land.id -> CTRL_WAIT(id)
 
 -- ==========================================
 -- COMPOSIÇÃO PARALELA DO DRONE
@@ -136,7 +137,7 @@ SYS_1(id) =
     CONTROL(id) [| SYNC_CTRL_COMM |] COMM(id)
 
 SYS_2(id) =
-    SYS_1(id) [| SYNC_CTRL_SENS |] SENS
+    SYS_1(id) [| SYNC_CTRL_SENS |] SENS(id)
 
 DRONE(id) =
     SYS_2(id) [| union(SYNC_CTRL_ELEC,SYNC_COMM_ELEC) |] ELEC(id,10)
