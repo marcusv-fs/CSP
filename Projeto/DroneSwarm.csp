@@ -229,3 +229,29 @@ VISIBLE = {| connect_to_gcs, receive_mission, take_control, manual_cmd,
 HIDDEN = diff(Events, VISIBLE)
 
 assert OPERATOR_EXCLUSIVE(0) [T= (Sistema_Uni \ HIDDEN)
+
+-- Toda falha leva a uma recuperação segura, que consiste em reportar o erro e, em seguida, executar uma das políticas de recuperação: pousar imediatamente ou retornar para casa e pousar.
+RECOVERY_POLICY(id) =
+    report_error.id?e -> RECOVERY_POLICY(id)
+    []return_home.id -> land.id -> RECOVERY_POLICY(id)
+    [] land.id -> RECOVERY_POLICY(id)
+
+VISIBLE2 = {| report_error, return_home, land |}
+
+HIDDEN2 = diff(Events, VISIBLE2)
+
+assert RECOVERY_POLICY(0) [T= (Sistema_Uni \ HIDDEN2)
+
+-- Uma missão sempre termina de forma segura: ou ela termina e volta pra casa normalmente, ou uma política de recuperação é executada.
+
+MISSION_TERMINATION(id) =
+    receive_mission.id?m -> EXEC(id)
+
+EXEC(id) =
+    move.id -> EXEC(id)
+    [] report_gcs.id.MISSION_FINISHED -> return_home.id -> land.id -> MISSION_TERMINATION(id)
+    [] RECOVERY_POLICY(id)
+
+VISIBLE3 = {| receive_mission, move, report_gcs, report_error, return_home, land |}
+
+HIDDEN3 = diff(Events, VISIBLE3)
